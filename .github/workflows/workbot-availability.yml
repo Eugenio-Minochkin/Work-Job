@@ -1,0 +1,75 @@
+name: Work Серпухов availability
+on:
+  schedule:
+    - cron: '2-59/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      drill:
+        description: Open and resolve a clearly marked test incident
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: workbot-availability
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Check the public Mini App and track incidents
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          DRILL: ${{ inputs.drill }}
+        run: |
+          set -euo pipefail
+          site=https://workbot.194.233.78.171.sslip.io
+          title='Work Серпухов · приложение недоступно'
+          marker='<!-- workbot-availability:v1 -->'
+          if [[ "$DRILL" == true ]]; then
+            title='Учебная проверка · уведомление о сбое Work Серпухов'
+            marker='<!-- workbot-availability:drill -->'
+          fi
+          open_incident() {
+            number=$(gh api --method GET "repos/$GH_REPO/issues" --paginate -f state=open -f creator='github-actions[bot]' -f per_page=100 |
+              jq -sr --arg marker "$marker" '[.[][] | select((.pull_request == null) and ((.body // "") | contains($marker)))][0].number // empty')
+          }
+          report_down() {
+            open_incident
+            if [[ -z "$number" ]]; then
+              body="$marker"$'\n'"@$OWNER $1"$'\n'"Проверка: $site/jobs/shift/"
+              gh issue create --repo "$GH_REPO" --assignee "$OWNER" --title "$title" --body "$body"
+            fi
+          }
+          report_up() {
+            open_incident
+            if [[ -n "$number" ]]; then
+              gh issue close "$number" --repo "$GH_REPO" --comment "$1"
+            fi
+          }
+          probe() {
+            local path=$1 expected=$2 code
+            code=$(curl --proto '=https' --max-time 10 --silent --show-error --output "$RUNNER_TEMP/workbot-page" --write-out '%{http_code}' "$site$path") || return 1
+            [[ "$code" == 200 ]] && grep -Fq "$expected" "$RUNNER_TEMP/workbot-page"
+          }
+          available() {
+            probe / '<h1>Вакансии и подработка</h1>' && probe /jobs/shift/ '<title>Подработка · Work Серпухов</title>'
+          }
+          if ! available; then
+            sleep 20
+            if ! available; then
+              if [[ "$DRILL" != true ]]; then report_down 'Две внешние проверки подряд не прошли.'; fi
+              exit 1
+            fi
+          fi
+          if [[ "$DRILL" == true ]]; then
+            report_down 'Это проверка доставки уведомлений. Сайт отвечает.'
+            report_up 'Учебная проверка завершена. Главная страница и лента смен доступны.'
+          else
+            report_up 'Доступ восстановлен. Главная страница и лента смен снова отвечают.'
+          fi
