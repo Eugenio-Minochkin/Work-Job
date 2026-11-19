@@ -31,6 +31,7 @@ jobs:
           site=https://workbot.194.233.78.171.sslip.io
           title='Work Серпухов · приложение недоступно'
           marker='<!-- workbot-availability:v1 -->'
+          number=''
           if [[ "$DRILL" == true ]]; then
             title='Учебная проверка · уведомление о сбое Work Серпухов'
             marker='<!-- workbot-availability:drill -->'
@@ -42,14 +43,17 @@ jobs:
           report_down() {
             open_incident
             if [[ -z "$number" ]]; then
-              body="$marker"$'\n'"@$OWNER $1"$'\n'"Проверка: $site/jobs/shift/"
-              gh issue create --repo "$GH_REPO" --assignee "$OWNER" --title "$title" --body "$body"
+              printf '%s\n@%s %s\nПроверка: %s/jobs/shift/\n' "$marker" "$OWNER" "$1" "$site" > "$RUNNER_TEMP/workbot-issue.md"
+              created=$(gh issue create --repo "$GH_REPO" --assignee "$OWNER" --title "$title" --body-file "$RUNNER_TEMP/workbot-issue.md")
+              number=${created##*/}
+              [[ "$number" =~ ^[0-9]+$ ]]
             fi
           }
           report_up() {
-            open_incident
+            if [[ -z "$number" ]]; then open_incident; fi
             if [[ -n "$number" ]]; then
               gh issue close "$number" --repo "$GH_REPO" --comment "$1"
+              [[ "$(gh api "repos/$GH_REPO/issues/$number" --jq .state)" == closed ]]
             fi
           }
           probe() {
